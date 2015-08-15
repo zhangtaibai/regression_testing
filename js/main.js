@@ -33,7 +33,7 @@ Array.prototype.unique = function()
         }
     }
     return re;
-}
+};
 var preventDefault = function() {
     $(document).on({
         dragleave:function(e){    //拖离
@@ -143,36 +143,48 @@ var CssOperater = (function() {
         }
         return tmp;
     };
-    Operater.prototype.getSelecter = function (str) {
-        var minified = new CleanCSS().minify(str).styles;
-        var selecter = [], minified = "}" + minified,
-            reg = new RegExp("}([^{}%@]*){","g"),
-            mediaFilter = new RegExp(/@media[^{}]*{/g);
-        minified = minified.replace(mediaFilter, "$&}");
-        var tmparr = minified.match(reg);
-        for (var i = 0; i < tmparr.length; i++) {
-            var tmpStr = tmparr[i].replace('}','').replace('{','');
-            selecter.push(tmpStr);
+    Operater.prototype.delUselsessSelecter = function (str, selecter) {
+        var _selecter, regComma, regStyle, length = selecter.length;
+        for (var i = 0; i < length; i++) {
+            _selecter = selecter[i].replace('(', '\\(').replace(')', '\\)');
+            regComma  = new RegExp('([,\\t\\n\\s\\/]+)' + _selecter + '\\s*,', "g");
+            regStyle  = new RegExp('(}[\\t\\n\\s\\/]*)' + _selecter + '\\s*{([^}]*)}', "g");
+            str       = str.replace(regComma, '$1').replace(regStyle, '$1');
         };
+        return str;
+    };
+    //获取所有的css选择器
+    Operater.prototype.getSelecter = function (str) {
+        var minified = "}" + new CleanCSS().minify(str).styles,
+            selecter = [],
+            reg = new RegExp("}([^{}%@]*){","g"),    
+            mediaFilter = new RegExp(/@media[^{}]*{/g);
+
+        minified = minified.replace(mediaFilter, "$&}");
+        var tmparray = minified.match(reg);
+        for (var i = 0; i < tmparray.length; i++) {
+            var tmpStr = tmparray[i].replace('}','').replace('{','');
+            selecter.push(tmpStr);
+        }
         return selecter.join(',').split(',');
     };
     Operater.prototype.contrastPage = function (nodes, testData, pageName) {
-        var flag = false, msg = [], str = '';
-        console.log(testData.length)
+        var flag = false, msg = [], str = '', pid = md5(pageName);
         for(var i = 0; i < nodes.length; i++) {
             var node = this.getStyle(nodes[i]),
                 testDataTmp = testData[md5(i + nodes[i].tagName)];
-            if( JSON.stringify(node) !== JSON.stringify(testDataTmp) ) {
+            //console.log(testDataTmp)
+            if(!testDataTmp) {
+                //console.log(nodes[i] + pageName)
+            }
+            else if( JSON.stringify(node) !== JSON.stringify(testDataTmp) ) {
                 if(!flag) {
-                    //console.log("网页"+ pageName +"有变化");
-                    str += "网页"+ pageName +"有变化\n";
+                    str += "网页"+ pageName + "有变化\n";
                 }
                 flag = flag ? flag : true;
-               //console.log("\n元素" + nodes[i].outerHTML + '发生了改变\n');
                 str += "\n元素" + nodes[i].outerHTML + '发生了改变\n';
                 for (var j in testDataTmp) {
                     if(!(testDataTmp[j] === node[j])) {
-                        //console.log(j + '的值由：' + testDataTmp[j] + '变为了：' + node[j]);
                         str += j + '的值由：' + testDataTmp[j] + '变为了：' + node[j] + '\n';
                     }
                 }
@@ -188,10 +200,10 @@ var CssOperater = (function() {
             msg.push({
                 "txt": "网页"+ pageName + "有变化",
                 "type": 1,
-                "id": pageName
+                "id": pid
             });
         }
-        global.data[pageName] = {"data" : str};
+        global.data[pid] = {"data" : str};
         $('#outPutMsg').append(render({"msg" : msg}));
     };
     return Operater;
@@ -202,6 +214,10 @@ var App = (function() {
         this.option = option;
         this.htmlfile = [];
         this.curPage = 0;
+        this.processBar = $('#progress .bar');
+        this.frame = $('#iframe')[0];
+        this.cssPath = '';
+        this.useLessCss = [];
     };
     App.prototype = new CssOperater();
     App.prototype.bindEvent = function() {
@@ -213,13 +229,7 @@ var App = (function() {
         this.dragBox.bind('dragleave', function(e) {
             domDragEnd(this);
         });
-        this.dragBox.bind('drop', function(e) {
-            domDragEnd(this);
-            var fileList = window.event.dataTransfer.files; //获取文件对象
-            //检测是否是拖拽文件到页面的操作
-            if(fileList.length === 0){return false;}
-            self.readFolder(fileList[0].path);
-        });
+
         $('#createVersion').click(function() {
             self.createTestJson();
         });
@@ -229,40 +239,76 @@ var App = (function() {
         $('#startTest').click(function() {
             self.startTest();
         });
-        
         $('#uploadCss').change(function() {
+            self.cssPath = this.value;
             self.getUselessCss(this.value);
         });
-
+        $('#startCssTest').click(function() {
+            if(self.cssPath) {
+                self.getUselessCss(self.cssPath);
+            } else {
+                self.tip('清先上传css', 'error');
+            }
+        });
+        $('#clearUselessCss').click(function() {
+            if(self.cssPath) {
+                self.clearUselessCss(self.cssPath);
+            } else {
+                self.tip('清先上传css', 'error');
+            }
+        });
+        this.dragBox.bind('drop', function(e) {
+            domDragEnd(this);
+            var fileList = window.event.dataTransfer.files;
+            if(fileList.length === 0){return false;}
+            $('#dest').val(fileList[0].path);
+            self.dest = fileList[0].path;
+            if(!fs.existsSync(self.dest + '/.testdata/')) {
+                fs.mkdirSync(self.dest + '/.testdata');
+            }
+            self.htmlfile = [];
+            self.loadTestVer();
+            self.readFolder(fileList[0].path);
+        });
         $('#filePathDialog').change(function() {
             $('#dest').val(this.value);
             self.dest = this.value;
             if(!fs.existsSync(self.dest + '/.testdata/')) {
-                fs.mkdir(self.dest + '/.testdata');
+                fs.mkdirSync(self.dest + '/.testdata');
             }
             self.htmlfile = [];
             self.loadTestVer();
             self.readFolder(this.value);
         });
     };
-
+    App.prototype.clearUselessCss = function(cssPath) {
+        if(this.useLessCss.length <= 0) {
+            this.tip('清先扫描css', 'error');
+        }
+        var cssText = this.delUselsessSelecter(fs.readFileSync(cssPath, 'utf-8'), this.useLessCss), 
+            clearCss = path.dirname(cssPath) + '/' + path.basename(cssPath, '.css') + '.clear.css';
+        fs.writeFileSync(clearCss, cssText, 'utf-8');
+        console.log(clearCss)
+        this.tip('清理成功，文件'+ clearCss +'生成', 'alert-success');
+    },
     App.prototype.getUselessCss = function(cssPath) {
         var self = this, useFulCss = [];
         self.cssSelecter = self.getSelecter(fs.readFileSync(cssPath, 'utf-8'));
+        self.tip('css扫描中，请稍后', '');
         _scan();
         function _scan() {
             for(var i = self.curPage; i < self.htmlfile.length; i++) {
-                $('#iframe')[0].src = self.htmlfile[i].path;
-                $('#iframe')[0].onload = function() {
+                self.frame.src = self.htmlfile[i].path;
+                self.frame.onload = function() {
                     for (var j = 0; j < self.cssSelecter.length; j++) {
-                        if( $(this.contentWindow.document).find(self.cssSelecter[j].split(':')[0]).length > 0 ) {
+                        //console.log(self.cssSelecter[j].split(':')[0])
+                        if( this.contentWindow.document.querySelector(self.cssSelecter[j].split(':')[0]) ) {
                            useFulCss.push(self.cssSelecter[j]);
                         }
-                    };
-                    $('#progress .bar').css('width', Math.ceil(self.curPage * 100 / self.htmlfile.length) + '%');
+                    }
                     self.curPage++;
+                    self._showProcess();
                     if(self.curPage == self.htmlfile.length) {
-                        $('#progress').hide();
                         self.tip('css扫描完毕', 'alert-success');
                         self.curPage = 0;
                         _showRes();
@@ -274,7 +320,6 @@ var App = (function() {
                 };
                 break;
             }
-            
         }
         function _showRes() {
             var msg = [], useLessCss = _cj(useFulCss.unique(), self.cssSelecter);
@@ -283,7 +328,8 @@ var App = (function() {
                     "txt": "选择器: " + useLessCss[i] + " 没有命中任何DOM节点",
                     "type": 0
                 });
-            };
+            }
+            self.useLessCss = useLessCss;
             $('#outPutMsg').html('').append(render({"msg" : msg}));
         }
         function _cj(a, b) { // 差集
@@ -303,20 +349,19 @@ var App = (function() {
         }
         var self = this, ver = moment().format("MM月DD日hh时mm分ss秒");
         ver = self.dest + '/.testdata/' + ver;
-        fs.mkdir(ver);
+        fs.mkdirSync(ver);
+        self.tip('测试数据创建中，请稍后', '');
         _create();
-        $('#progress').show();
         function _create() {
             for(var i = self.curPage; i < self.htmlfile.length; i++) {
-                $('#iframe')[0].src = self.htmlfile[i].path;
-                $('#iframe')[0].onload = function() {
+                self.frame.src = self.htmlfile[i].path;
+                self.frame.onload = function() {
                     var nodes = this.contentWindow.document.getElementsByTagName('*');
                     var json = JSON.stringify(self.getStyleJson(nodes));
                     fs.writeFile(ver + '/' + self.htmlfile[i].name + '.json', json, 'utf-8');
-                    $('#progress .bar').css('width', Math.ceil(self.curPage *100 / self.htmlfile.length) + '%');
                     self.curPage++;
+                    self._showProcess();
                     if(self.curPage == self.htmlfile.length) {
-                        $('#progress').hide();
                         self.tip('版本生成成功', 'alert-success');
                         self.loadTestVer();
                         self.curPage = 0;
@@ -333,17 +378,19 @@ var App = (function() {
         var testDataPath = this.dest + '/.testdata' + '/' + $('#htmlVersion')[0].value,
             testData;
         this.clearMsg();
+        self.tip('测试中，请稍后', '');
         _contrast();
         function _contrast() {
             for(var i = self.curPage; i < self.htmlfile.length; i++) {
                 testData = JSON.parse(fs.readFileSync(testDataPath + '/' + self.htmlfile[i].name + '.json', 'utf8'));
                 (function() {
                     var tmp = i;
-                    $('#iframe')[0].src = self.htmlfile[i].path;
-                    $('#iframe')[0].onload = function() {
+                    self.frame.src = self.htmlfile[i].path;
+                    self.frame.onload = function() {
                         var nodes = this.contentWindow.document.getElementsByTagName('*');
                         self.curPage++;
-                        self.contrastPage(nodes, testData, self.htmlfile[tmp].name);
+                        self.contrastPage(nodes, testData, self.htmlfile[tmp].path);
+                        self._showProcess();
                         if(self.curPage == self.htmlfile.length) {
                             self.tip('测试完毕', 'alert-success');
                             self.curPage = 0;
@@ -365,16 +412,30 @@ var App = (function() {
         $('#htmlVersion').html(tmp);
     };
     App.prototype.delTestVer = function() {
+        if(!$('#htmlVersion')[0].value) {
+            this.tip('已经木有版本数据了', 'alert-error');
+            return;
+        }
         deleteFolderRecursive(this.dest + '/.testdata' + '/' + $('#htmlVersion')[0].value);
+        this.tip('版本'+ $('#htmlVersion')[0].value +'删除成功', 'alert-success');
         this.loadTestVer();
     };
+
     App.prototype.clearMsg = function() {
         $('#outPutMsg').html('');
     };
 
-    App.prototype.tip = function(txt, cls) {
-        $('#alert').html(txt)[0].className = 'alert ' + cls;
+    App.prototype._showProcess = function() {
+        var pro = Math.round((this.curPage) * 100 / this.htmlfile.length);
+        if(pro < 1 || pro > 99) {
+            $('#progress').hide();
+        } else {
+            $('#progress').show();
+        }
+        this.processBar.css('width', pro + '%');
     };
+
+
     App.prototype.readFolder = function(fpath) {
         var files = scanFolder(fpath), msg = [];
         for(var name in files) {
@@ -389,14 +450,20 @@ var App = (function() {
                 });
             }
         }
+        this.tip('html文件读取成功', 'alert-success');
         $('#outPutMsg').html(render({"msg" : msg}));
     };
+
+    App.prototype.tip = function(txt, cls) {
+        $('#alert').html(txt)[0].className = 'alert ' + cls;
+    };
+
     App.prototype.init = function() {
         preventDefault();
         this.dragBox = $('#' + this.option.dragBox);
         this.dest = $('#dest').val();
         if(!fs.existsSync(this.dest + '/.testdata/')) {
-            fs.mkdir(this.dest + '/.testdata');
+            fs.mkdirSync(this.dest + '/.testdata');
         }
         msgTepl = $('#msgTepl')[0].innerText;
         render = template.compile(msgTepl);
